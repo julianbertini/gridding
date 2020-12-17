@@ -187,7 +187,7 @@ calcdcflut(PyObject *self, PyObject *args)
 
     dcfptr = dcf; 
     for (kcount1 = 0; kcount1 < nsamples; kcount1++)
-            *(dcfptr++) = 1.0;
+        *(dcfptr++) = 1.0;
      
     /* ========= Loop Through k-space Samples ========= */
                     
@@ -238,10 +238,12 @@ calcdcflut(PyObject *self, PyObject *args)
         dcfptr++;
     }
 
-    // needed when writing a "void" routine
+    // needed when writing a "void" Python C routine
     Py_INCREF(Py_None);
     return Py_None;
 }
+
+/*** PYTHON MODULE CREATION METHODS  ***/
 
 static PyMethodDef gridmethods[] = {
 /* */
