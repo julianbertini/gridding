@@ -1,9 +1,9 @@
 from distutils.core import setup, Extension
 
-module1 = Extension('spam',
+module1 = Extension('grid',
                     sources = ['gridroutines_py.c'])
 
-setup (name = 'SpamPackage',
+setup (name = 'GridPackage',
        version = '1.0',
-       description = 'This is a demo package',
+       description = 'This is a gridding package.',
        ext_modules = [module1])
