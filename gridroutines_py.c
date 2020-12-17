@@ -7,7 +7,8 @@
 
 
 
-static double *conv_PyObject_to_array(pyobj)
+static double *
+conv_PyObject_to_array(pyobj)
 /* 
     Converts a PyObject that holds a sequence (list) into a C array
 
@@ -61,12 +62,14 @@ PyObject *pyobj; /* PyObject holding the Python list */
     return seq;
 }
 
-static int conv_array_to_PyObject(seq, pyobj)
+static int 
+conv_array_to_PyObject(seq, pyobj)
 /* 
     Converts a C array to a PyObject that holds a sequence (list) 
 
     Does NOT handle malloc() or free() calls. They must be handled by the caller.
-    I.e., the memory must already be assigned for seq.
+
+    pyobj is expected to already have PySequence support
 
     Returns 1 (true) on success, 0 (false) on failure.
 */
@@ -135,112 +138,109 @@ calcdcflut(PyObject *self, PyObject *args)
   ------------------------------------------------------------------ */
 
 {
-/* INPUT/OUTPUT PARAMETERS */
-PyObject *kx;		/* Array of kx locations of samples. */
-PyObject *ky;		/* Array of ky locations of samples. */
-PyObject *dcf;		/* Output: Density compensation factors. */
-PyObject *kerneltable;	/* 1D array of convolution kernel values, starting
-				        at 0, and going to convwidth. */
-int gridsize;		/* Number of points in kx and ky in grid. */
-int nsamples;		/* Number of k-space samples, total. */
-double convwidth;	/* Kernel width, in grid points.	*/
+    /* INPUT/OUTPUT PARAMETERS */
+    PyObject *py_kx;		/* Array of kx locations of samples. */
+    PyObject *py_ky;		/* Array of ky locations of samples. */
+    PyObject *py_dcf;		/* Output: Density compensation factors. */
+    PyObject *py_kerneltable;	/* 1D array of convolution kernel values, starting
+                            at 0, and going to convwidth. */
+    int gridsize;		/* Number of points in kx and ky in grid. */
+    int nsamples;		/* Number of k-space samples, total. */
+    int nkernelpts;		/* Number of points in kernel lookup-table */
+    double convwidth;	/* Kernel width, in grid points.	*/
 
-/* OTHER VARS */
-int nkernelpts;		/* Number of points in kernel lookup-table */
-int kcount1;		/* Counts through k-space sample locations */
-int kcount2;		/* Counts through k-space sample locations */
+    /* OTHER VARS */
+    int kcount1;		/* Counts through k-space sample locations */
+    int kcount2;		/* Counts through k-space sample locations */
 
-double *dcfptr;			/* Aux. pointer, for looping.	*/
-double *kxptr;			/* Aux. pointer. */
-double *kyptr;			/* Aux. pointer. */
+    double *dcf;
+    double *kx;
+    double *ky;
+    double *kerneltable;
 
-double kwidth;			/* Conv kernel width, in k-space units */
-double dkx,dky,dk;		/* Delta in x, y and abs(k) for kernel calc.*/
-int kernelind;			/* Index of kernel value, for lookup. */
-double fracdk;			/* Fractional part of lookup index. */
-double fracind;			/* Fractional lookup index. */
-double kern;			/* Kernel value, avoid duplicate calculation.*/
+    double *dcfptr;			/* Aux. pointer, for looping.	*/
+    double *kxptr;			/* Aux. pointer. */
+    double *kyptr;			/* Aux. pointer. */
 
-kwidth = convwidth/(double)(gridsize);	/* Width of kernel, in k-space units. */
+    double kwidth;			/* Conv kernel width, in k-space units */
+    double dkx,dky,dk;		/* Delta in x, y and abs(k) for kernel calc.*/
+    int kernelind;			/* Index of kernel value, for lookup. */
+    double fracdk;			/* Fractional part of lookup index. */
+    double fracind;			/* Fractional lookup index. */
+    double kern;			/* Kernel value, avoid duplicate calculation.*/
 
-/* parse input argument  */
-if (!PyArg_ParseTuple(args, "OOOOiid", &kx, &ky, &dcf, &kerneltable, &gridsize, &nsamples, &convwidth)) return NULL;
+    /* parse input argument  */
+    if (!PyArg_ParseTuple(args, "OOOOiiid", &py_kx, &py_ky, &py_dcf, &py_kerneltable, 
+    &gridsize, &nsamples, &nkernelpts, &convwidth)) return NULL;
 
-/* Here, need to convert Python lists n such into C variables */
-// Going to write a helper for this. 
+    kwidth = convwidth/(double)(gridsize);	/* Width of kernel, in k-space units. */
 
-// My hope is that I can just modify the *dcf pointer directly and not have to
-// return it to Python. Can easily test this first.
+    /* convert PyObject lists to C pointers */
+    kx = conv_PyObject_to_array(py_kx); // allocates memory
+    ky = conv_PyObject_to_array(py_ky); // allocates memory
+    dcf = conv_PyObject_to_array(py_dcf); // allocates memory
+    kerneltable = conv_PyObject_to_array(py_kerneltable); // allocates memory
 
-// Commenting everything else out to test initial array/PyObject conversions
+    /* ========= Set all DCFs to 1. ========== */
 
-// allocate memory
-double  *result = conv_PyObject_to_array(kx);
-ky = PySequence_Fast(ky, "argument must be iterable"); // new ref
-conv_array_to_PyObject(result, ky);
-if (result) free(result);
+    /* 	DCF = 1/(sum( ksamps convolved with kernel ) 	*/
 
+    dcfptr = dcf; 
+    for (kcount1 = 0; kcount1 < nsamples; kcount1++)
+            *(dcfptr++) = 1.0;
+     
+    /* ========= Loop Through k-space Samples ========= */
+                    
+    dcfptr = dcf;
+    kxptr = kx;
+    kyptr = ky;
+     
+    for (kcount1 = 0; kcount1 < nsamples; kcount1++)
+        {
+        /* printf("Current k-space location = (%f,%f) \n",*kxptr,*kyptr); */
 
-/* ========= Set all DCFs to 1. ========== */
+        for (kcount2 = kcount1+1; kcount2 < nsamples; kcount2++)
+            {
+            dkx = *kxptr-kx[kcount2];
+            dky = *kyptr-ky[kcount2];
+            dk = sqrt(dkx*dkx+dky*dky);	/* k-space separation*/
+            /*
+            printf("   Comparing with k=(%f,%f),  sep=%f \n",
+                    kx[kcount2],ky[kcount2],dk);	
+            */
+        
+            if (dk < kwidth)	/* sample affects this
+                           grid point */
+                {
+                /* Find index in kernel lookup table */
+                fracind = dk/kwidth*(double)(nkernelpts-1);
+                kernelind = (int)fracind;
+                fracdk = fracind-(double)kernelind;
 
-/* 	DCF = 1/(sum( ksamps convolved with kernel ) 	*/
+                /* Linearly interpolate in kernel lut */
+                kern = kerneltable[(int)kernelind]*(1-fracdk)+
+                        kerneltable[(int)kernelind+1]*fracdk;
 
-//dcfptr = dcf; 
-//for (kcount1 = 0; kcount1 < nsamples; kcount1++)
-//        *(dcfptr++) = 1.0;
-// 
-///* ========= Loop Through k-space Samples ========= */
-//                
-//dcfptr = dcf;
-//kxptr = kx;
-//kyptr = ky;
-// 
-//for (kcount1 = 0; kcount1 < nsamples; kcount1++)
-//	{
-//	/* printf("Current k-space location = (%f,%f) \n",*kxptr,*kyptr); */
-//
-//	for (kcount2 = kcount1+1; kcount2 < nsamples; kcount2++)
-//		{
-//		dkx = *kxptr-kx[kcount2];
-//		dky = *kyptr-ky[kcount2];
-//		dk = sqrt(dkx*dkx+dky*dky);	/* k-space separation*/
-//		/*
-//		printf("   Comparing with k=(%f,%f),  sep=%f \n",
-//				kx[kcount2],ky[kcount2],dk);	
-//		*/
-//	
-//		if (dk < kwidth)	/* sample affects this
-//					   grid point		*/
-//		    {
-//			/* Find index in kernel lookup table */
-//		    fracind = dk/kwidth*(double)(nkernelpts-1);
-//		    kernelind = (int)fracind;
-//		    fracdk = fracind-(double)kernelind;
-//
-//			/* Linearly interpolate in kernel lut */
-//		    kern = kerneltable[(int)kernelind]*(1-fracdk)+
-//		    		kerneltable[(int)kernelind+1]*fracdk;
-//
-//		    dcf[kcount2] += kern;
-//		    *dcfptr += kern;
-//		    }
-//		}
-//	dcfptr++;
-//	kxptr++;
-//	kyptr++;
-//	}
-//
-//// this resets dcfptr to the beg. of array (pointed to by dcf)
-//dcfptr = dcf; 
-//for (kcount1 = 0; kcount1 < nsamples; kcount1++)
-//    {
-//    *dcfptr = 1/(*dcfptr);
-//    dcfptr++;
-//    }
+                dcf[kcount2] += kern;
+                *dcfptr += kern;
+                }
+            }
+        dcfptr++;
+        kxptr++;
+        kyptr++;
+        }
 
-// needed when writing a "void" routine
-Py_INCREF(Py_None);
-return Py_None;
+    // this resets dcfptr to the beg. of array (pointed to by dcf)
+    dcfptr = dcf; 
+    for (kcount1 = 0; kcount1 < nsamples; kcount1++)
+    {
+        *dcfptr = 1/(*dcfptr);
+        dcfptr++;
+    }
+
+    // needed when writing a "void" routine
+    Py_INCREF(Py_None);
+    return Py_None;
 }
 
 static PyMethodDef gridmethods[] = {
