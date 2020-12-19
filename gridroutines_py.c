@@ -238,9 +238,180 @@ calcdcflut(PyObject *self, PyObject *args)
         dcfptr++;
     }
 
+    if (!conv_array_to_PyObject(dcf, py_dcf)) return NULL;
+    
+    free(dcf);
+    free(kx);
+    free(ky);
+    free(kerneltable);
+
     // needed when writing a "void" Python C routine
     Py_INCREF(Py_None);
     return Py_None;
+}
+
+static PyObject *
+gridlut(kx,ky,s_real,s_imag,nsamples, dcf,
+	sg_real,sg_imag, gridsize, convwidth, kerneltable, nkernelpts)
+
+/* Gridding function that uses a lookup table for a circularly
+	symmetric convolution kernel, with linear interpolation.  
+	See Notes below */
+
+/* INPUT/OUTPUT */
+
+double *kx;		/* Array of kx locations of samples. */
+double *ky;		/* Array of ky locations of samples. */
+double *s_real;		/* Sampled data, real part. */
+double *s_imag; 	/* Sampled data, real part. */
+int nsamples;		/* Number of k-space samples, total. */
+double *dcf;		/* Density compensation factors. */
+
+double *sg_real;	/* OUTPUT array, real parts of data. */
+double *sg_imag;	/* OUTPUT array, imag parts of data. */	 
+int gridsize;		/* Number of points in kx and ky in grid. */
+double convwidth;	/* Kernel width, in grid points.	*/
+double *kerneltable;	/* 1D array of convolution kernel values, starting
+				at 0, and going to convwidth. */
+int nkernelpts;		/* Number of points in kernel lookup-table */
+
+/*------------------------------------------------------------------
+	NOTES:
+
+	This uses the following formula, which describes the contribution
+	of each data sample to the value at each grid point:
+
+		grid-point value += data value / dcf * kernel(dk)
+
+	where:
+		data value is the complex sampled data value.
+		dcf is the density compensation factor for the sample point.
+		kernel is the convolution kernel function.
+		dk is the k-space separation between sample point and
+			grid point.
+
+	"grid units"  are integers from 0 to gridsize-1, where
+	the grid represents a k-space of -.5 to .5.
+
+	The convolution kernel is passed as a series of values 
+	that correspond to "kernel indices" 0 to nkernelpoints-1.
+  ------------------------------------------------------------------ */
+
+{
+int kcount;		/* Counts through k-space sample locations */
+int gcount1, gcount2;	/* Counters for loops */
+int col;		/* Grid Columns, for faster lookup. */
+
+double kwidth;			/* Conv kernel width, in k-space units */
+double dkx,dky,dk;		/* Delta in x, y and abs(k) for kernel calc.*/
+int ixmin,ixmax,iymin,iymax;	/* min/max indices that current k may affect*/
+int kernelind;			/* Index of kernel value, for lookup. */
+double fracdk;			/* Fractional part of lookup index. */
+double fracind;			/* Fractional lookup index. */
+double kern;			/* Kernel value, avoid duplicate calculation.*/
+double *sgrptr;			/* Aux. pointer, for loop. */
+double *sgiptr;			/* Aux. pointer, for loop. */
+int gridsizesq;			/* Square of gridsize */
+int gridcenter;			/* Index in output of kx,ky=0 points. */
+int gptr_cinc;			/* Increment for grid pointer. */
+gridcenter = gridsize/2;	/* Index of center of grid. */
+kwidth = convwidth/(double)(gridsize);	/* Width of kernel, in k-space units. */
+
+
+/* ========= Zero Output Points ========== */
+
+sgrptr = sg_real;
+sgiptr = sg_imag;
+gridsizesq = gridsize*gridsize;
+ 
+// setting each element in array to zero using the pointers
+for (gcount1 = 0; gcount1 < gridsizesq; gcount1++)
+    {
+	*sgrptr++ = 0;
+	*sgiptr++ = 0;
+	}
+
+ 
+/* ========= Loop Through k-space Samples ========= */
+                
+for (kcount = 0; kcount < nsamples; kcount++)
+	{
+
+	/* ----- Find limit indices of grid points that current
+		 sample may affect (and check they are within grid) ----- */
+
+    /* This is where the (kx, ky) positions come into play.
+
+       They tell us the bounds of the conv. kernel region, which
+       we then use to calculate the data values at the locations
+       within the kernel region below. */
+
+	ixmin = (int) ((*kx-kwidth)*gridsize + gridcenter);
+	if (ixmin < 0) ixmin=0;
+	ixmax = (int) ((*kx+kwidth)*gridsize + gridcenter)+1;
+	if (ixmax >= gridsize) ixmax=gridsize-1;
+	iymin = (int) ((*ky-kwidth)*gridsize + gridcenter);
+	if (iymin < 0) iymin=0;
+	iymax = (int) ((*ky+kwidth)*gridsize + gridcenter)+1;
+	if (iymax >= gridsize) iymax=gridsize-1;
+
+		
+    /* Increment for grid pointer at end of column to top of next col.
+       
+       Recall how in C we save a 2D array as a long 1D array with indexing
+       defined by A[row*NUM_COLS + col] 
+
+       The y-dim goes along the cols; the x-dim goes along the rows */
+
+	gptr_cinc = gridsize-(iymax-iymin)-1;	/* 1 bc at least 1 sgrptr++ */
+		
+    /* start the pointer at the min positions where the kernel has an effect */
+	sgrptr = sg_real + (ixmin*gridsize+iymin);
+	sgiptr = sg_imag + (ixmin*gridsize+iymin);
+						
+	for (gcount1 = ixmin; gcount1 <= ixmax; gcount1++)
+        {
+		dkx = (double)(gcount1-gridcenter) / (double)gridsize  - *kx;
+		for (gcount2 = iymin; gcount2 <= iymax; gcount2++)
+			{
+            dky = (double)(gcount2-gridcenter) / 
+            (double)gridsize - *ky;
+
+			dk = sqrt(dkx*dkx+dky*dky);	/* k-space separation*/
+
+			if (dk < kwidth)	/* sample affects this
+						   grid point */
+			    {
+				/* Find index in kernel lookup table */
+			    fracind = dk/kwidth*(double)(nkernelpts-1);
+			    kernelind = (int)fracind;
+			    fracdk = fracind-(double)kernelind;
+
+				/* Linearly interpolate in kernel lut */
+			    kern = kerneltable[(int)kernelind]*(1-fracdk)+
+			    		kerneltable[(int)kernelind+1]*fracdk;
+
+                /* This is the conv. step. since the s_real/s_imag contain
+                   discrete points, this is like conv. the kernel with a 
+                   bunch of delta functions. So we can just mult. the
+                   kernel value at the given disp. by the data point value.
+                   No need to add a bunch of values together, since data
+                   point is like a delta func. */
+			    *sgrptr += kern * *s_real * *dcf;
+			    *sgiptr += kern * *s_imag * *dcf;
+			    }
+			sgrptr++;
+			sgiptr++;
+            }
+		sgrptr+= gptr_cinc;
+		sgiptr+= gptr_cinc;
+        }
+	kx++;		/* Advance kx pointer */
+	ky++;   	/* Advance ky pointer */
+	dcf++;		/* Advance dcf pointer */		
+	s_real++;	/* Advance real-sample pointer */
+	s_imag++;	/* Advance imag-sample pointer */
+	}
 }
 
 /*** PYTHON MODULE CREATION METHODS  ***/
