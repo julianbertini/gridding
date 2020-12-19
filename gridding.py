@@ -6,7 +6,7 @@ import grid
 
 if __name__ == "__main__":
     
-    mat = loadmat("./spiralexampledata.mat")
+    mat = loadmat("data/spiralexampledata.mat")
 
     overgrid_factor = 2
     kwidth = 1.5
