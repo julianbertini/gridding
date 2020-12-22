@@ -147,7 +147,7 @@ calcdcflut(PyObject *self, PyObject *args)
     int gridsize;		/* Number of points in kx and ky in grid. */
     int nsamples;		/* Number of k-space samples, total. */
     int nkernelpts;		/* Number of points in kernel lookup-table */
-    double convwidth;	/* Kernel width, in grid points.	*/
+    double convwidth;	/* Kernel width, in grid points. */
 
     /* OTHER VARS */
     int kcount1;		/* Counts through k-space sample locations */
@@ -158,7 +158,7 @@ calcdcflut(PyObject *self, PyObject *args)
     double *ky;
     double *kerneltable;
 
-    double *dcfptr;			/* Aux. pointer, for looping.	*/
+    double *dcfptr;			/* Aux. pointer, for looping. */
     double *kxptr;			/* Aux. pointer. */
     double *kyptr;			/* Aux. pointer. */
 
@@ -183,7 +183,7 @@ calcdcflut(PyObject *self, PyObject *args)
 
     /* ========= Set all DCFs to 1. ========== */
 
-    /* 	DCF = 1/(sum( ksamps convolved with kernel ) 	*/
+    /* 	DCF = 1/(sum( ksamps convolved with kernel )  */
 
     dcfptr = dcf; 
     for (kcount1 = 0; kcount1 < nsamples; kcount1++)
@@ -251,8 +251,7 @@ calcdcflut(PyObject *self, PyObject *args)
 }
 
 static PyObject *
-gridlut(kx,ky,s_real,s_imag,nsamples, dcf,
-	sg_real,sg_imag, gridsize, convwidth, kerneltable, nkernelpts)
+gridlut(PyObject *self, PyObject *args)
 
 /* Gridding function that uses a lookup table for a circularly
 	symmetric convolution kernel, with linear interpolation.  
@@ -260,20 +259,6 @@ gridlut(kx,ky,s_real,s_imag,nsamples, dcf,
 
 /* INPUT/OUTPUT */
 
-double *kx;		/* Array of kx locations of samples. */
-double *ky;		/* Array of ky locations of samples. */
-double *s_real;		/* Sampled data, real part. */
-double *s_imag; 	/* Sampled data, real part. */
-int nsamples;		/* Number of k-space samples, total. */
-double *dcf;		/* Density compensation factors. */
-
-double *sg_real;	/* OUTPUT array, real parts of data. */
-double *sg_imag;	/* OUTPUT array, imag parts of data. */	 
-int gridsize;		/* Number of points in kx and ky in grid. */
-double convwidth;	/* Kernel width, in grid points.	*/
-double *kerneltable;	/* 1D array of convolution kernel values, starting
-				at 0, and going to convwidth. */
-int nkernelpts;		/* Number of points in kernel lookup-table */
 
 /*------------------------------------------------------------------
 	NOTES:
@@ -298,120 +283,191 @@ int nkernelpts;		/* Number of points in kernel lookup-table */
   ------------------------------------------------------------------ */
 
 {
-int kcount;		/* Counts through k-space sample locations */
-int gcount1, gcount2;	/* Counters for loops */
-int col;		/* Grid Columns, for faster lookup. */
+     /* INPUT/OUTPUT PARAMETERS */
+    PyObject *py_kx;		/* Array of kx locations of samples. */
+    PyObject *py_ky;		/* Array of ky locations of samples. */
+    PyObject *py_s_real;		/* Sampled data, real part. */
+    PyObject *py_s_imag; 	/* Sampled data, real part. */
+    PyObject *py_dcf;		/* Density compensation factors. */
+    PyObject *py_sg_real;	/* OUTPUT array, real parts of data. */
+    PyObject *py_sg_imag;	/* OUTPUT array, imag parts of data. */	 
+    PyObject *py_kerneltable;	/* 1D array of convolution kernel values, starting
+                               at 0, and going to convwidth. */
 
-double kwidth;			/* Conv kernel width, in k-space units */
-double dkx,dky,dk;		/* Delta in x, y and abs(k) for kernel calc.*/
-int ixmin,ixmax,iymin,iymax;	/* min/max indices that current k may affect*/
-int kernelind;			/* Index of kernel value, for lookup. */
-double fracdk;			/* Fractional part of lookup index. */
-double fracind;			/* Fractional lookup index. */
-double kern;			/* Kernel value, avoid duplicate calculation.*/
-double *sgrptr;			/* Aux. pointer, for loop. */
-double *sgiptr;			/* Aux. pointer, for loop. */
-int gridsizesq;			/* Square of gridsize */
-int gridcenter;			/* Index in output of kx,ky=0 points. */
-int gptr_cinc;			/* Increment for grid pointer. */
-gridcenter = gridsize/2;	/* Index of center of grid. */
-kwidth = convwidth/(double)(gridsize);	/* Width of kernel, in k-space units. */
+    int nsamples;		/* Number of k-space samples, total. */
+    int gridsize;		/* Number of points in kx and ky in grid. */
+    int nkernelpts;		/* Number of points in kernel lookup-table */
+    double convwidth;	/* Kernel width, in grid points.	*/
+
+    /* OTHER VARS */
+    double *kx;		/* Array of kx locations of samples. */
+    double *ky;		/* Array of ky locations of samples. */
+    double *s_real;		/* Sampled data, real part. */
+    double *s_imag; 	/* Sampled data, real part. */
+    double *dcf;		/* Density compensation factors. */
+    double *sg_real;	/* OUTPUT array, real parts of data. */
+    double *sg_imag;	/* OUTPUT array, imag parts of data. */	 
+    double *kerneltable;	/* 1D array of convolution kernel values, starting
+                               at 0, and going to convwidth. */
+
+    int kcount;		/* Counts through k-space sample locations */
+    int gcount1, gcount2;	/* Counters for loops */
+    //int col;		/* Grid Columns, for faster lookup. */
+
+    double kwidth;			/* Conv kernel width, in k-space units */
+    double dkx,dky,dk;		/* Delta in x, y and abs(k) for kernel calc.*/
+    int ixmin,ixmax,iymin,iymax;	/* min/max indices that current k may affect*/
+    int kernelind;			/* Index of kernel value, for lookup. */
+    double fracdk;			/* Fractional part of lookup index. */
+    double fracind;			/* Fractional lookup index. */
+    double kern;			/* Kernel value, avoid duplicate calculation.*/
+
+    double *dcfptr;			/* Aux. pointer, for looping. */
+    double *kxptr;			/* Aux. pointer. */
+    double *kyptr;			/* Aux. pointer. */
+    double *srptr;          /* Aux. pointer. */
+    double *siptr;          /* Aux. pointer. */
+    double *sgrptr;			/* Aux. pointer, for loop. */
+    double *sgiptr;			/* Aux. pointer, for loop. */
+
+    int gridsizesq;			/* Square of gridsize */
+    int gridcenter;			/* Index in output of kx,ky=0 points. */
+    int gptr_cinc;			/* Increment for grid pointer. */
+
+    /* parse input argument  */
+    if (!PyArg_ParseTuple(args, "OOOOOOOOiiid", &py_kx, &py_ky, &py_s_real, &py_s_imag, 
+    &py_dcf, &py_sg_real, &py_sg_imag, &py_kerneltable, &nsamples, &gridsize, &nkernelpts, &convwidth)) return NULL;
+
+    gridcenter = gridsize/2;	/* Index of center of grid. */
+    kwidth = convwidth/(double)(gridsize);	/* Width of kernel, in k-space units. */
+
+    /* convert PyObjects to C pointers 
+       all allocate memory; must free once done. */
+    kx = conv_PyObject_to_array(py_kx);
+    ky = conv_PyObject_to_array(py_ky);
+    s_real = conv_PyObject_to_array(py_s_real);
+    s_imag = conv_PyObject_to_array(py_s_imag);
+    dcf = conv_PyObject_to_array(py_dcf);
+    sg_real = conv_PyObject_to_array(py_sg_real);
+    sg_imag = conv_PyObject_to_array(py_sg_imag);
+    kerneltable = conv_PyObject_to_array(py_kerneltable);
 
 
-/* ========= Zero Output Points ========== */
+    /* ========= Zero Output Points ========== */
 
-sgrptr = sg_real;
-sgiptr = sg_imag;
-gridsizesq = gridsize*gridsize;
- 
-// setting each element in array to zero using the pointers
-for (gcount1 = 0; gcount1 < gridsizesq; gcount1++)
-    {
-	*sgrptr++ = 0;
-	*sgiptr++ = 0;
-	}
-
- 
-/* ========= Loop Through k-space Samples ========= */
-                
-for (kcount = 0; kcount < nsamples; kcount++)
-	{
-
-	/* ----- Find limit indices of grid points that current
-		 sample may affect (and check they are within grid) ----- */
-
-    /* This is where the (kx, ky) positions come into play.
-
-       They tell us the bounds of the conv. kernel region, which
-       we then use to calculate the data values at the locations
-       within the kernel region below. */
-
-	ixmin = (int) ((*kx-kwidth)*gridsize + gridcenter);
-	if (ixmin < 0) ixmin=0;
-	ixmax = (int) ((*kx+kwidth)*gridsize + gridcenter)+1;
-	if (ixmax >= gridsize) ixmax=gridsize-1;
-	iymin = (int) ((*ky-kwidth)*gridsize + gridcenter);
-	if (iymin < 0) iymin=0;
-	iymax = (int) ((*ky+kwidth)*gridsize + gridcenter)+1;
-	if (iymax >= gridsize) iymax=gridsize-1;
-
-		
-    /* Increment for grid pointer at end of column to top of next col.
-       
-       Recall how in C we save a 2D array as a long 1D array with indexing
-       defined by A[row*NUM_COLS + col] 
-
-       The y-dim goes along the cols; the x-dim goes along the rows */
-
-	gptr_cinc = gridsize-(iymax-iymin)-1;	/* 1 bc at least 1 sgrptr++ */
-		
-    /* start the pointer at the min positions where the kernel has an effect */
-	sgrptr = sg_real + (ixmin*gridsize+iymin);
-	sgiptr = sg_imag + (ixmin*gridsize+iymin);
-						
-	for (gcount1 = ixmin; gcount1 <= ixmax; gcount1++)
+    dcfptr = dcf;
+    kxptr = kx;
+    kyptr = ky;
+    srptr = s_real;
+    siptr = s_imag;
+    sgrptr = sg_real;
+    sgiptr = sg_imag;
+    gridsizesq = gridsize*gridsize;
+     
+    // setting each element in array to zero using the pointers
+    for (gcount1 = 0; gcount1 < gridsizesq; gcount1++)
         {
-		dkx = (double)(gcount1-gridcenter) / (double)gridsize  - *kx;
-		for (gcount2 = iymin; gcount2 <= iymax; gcount2++)
-			{
-            dky = (double)(gcount2-gridcenter) / 
-            (double)gridsize - *ky;
-
-			dk = sqrt(dkx*dkx+dky*dky);	/* k-space separation*/
-
-			if (dk < kwidth)	/* sample affects this
-						   grid point */
-			    {
-				/* Find index in kernel lookup table */
-			    fracind = dk/kwidth*(double)(nkernelpts-1);
-			    kernelind = (int)fracind;
-			    fracdk = fracind-(double)kernelind;
-
-				/* Linearly interpolate in kernel lut */
-			    kern = kerneltable[(int)kernelind]*(1-fracdk)+
-			    		kerneltable[(int)kernelind+1]*fracdk;
-
-                /* This is the conv. step. since the s_real/s_imag contain
-                   discrete points, this is like conv. the kernel with a 
-                   bunch of delta functions. So we can just mult. the
-                   kernel value at the given disp. by the data point value.
-                   No need to add a bunch of values together, since data
-                   point is like a delta func. */
-			    *sgrptr += kern * *s_real * *dcf;
-			    *sgiptr += kern * *s_imag * *dcf;
-			    }
-			sgrptr++;
-			sgiptr++;
-            }
-		sgrptr+= gptr_cinc;
-		sgiptr+= gptr_cinc;
+        *sgrptr++ = 0;
+        *sgiptr++ = 0;
         }
-	kx++;		/* Advance kx pointer */
-	ky++;   	/* Advance ky pointer */
-	dcf++;		/* Advance dcf pointer */		
-	s_real++;	/* Advance real-sample pointer */
-	s_imag++;	/* Advance imag-sample pointer */
-	}
+
+     
+    /* ========= Loop Through k-space Samples ========= */
+                    
+    for (kcount = 0; kcount < nsamples; kcount++)
+        {
+
+        /* ----- Find limit indices of grid points that current
+             sample may affect (and check they are within grid) ----- */
+
+        /* This is where the (kx, ky) positions come into play.
+
+           They tell us the bounds of the conv. kernel region, which
+           we then use to calculate the data values at the locations
+           within the kernel region below. */
+
+        ixmin = (int) ((*kxptr-kwidth)*gridsize + gridcenter);
+        if (ixmin < 0) ixmin=0;
+        ixmax = (int) ((*kxptr+kwidth)*gridsize + gridcenter)+1;
+        if (ixmax >= gridsize) ixmax=gridsize-1;
+        iymin = (int) ((*kyptr-kwidth)*gridsize + gridcenter);
+        if (iymin < 0) iymin=0;
+        iymax = (int) ((*kyptr+kwidth)*gridsize + gridcenter)+1;
+        if (iymax >= gridsize) iymax=gridsize-1;
+
+            
+        /* Increment for grid pointer at end of column to top of next col.
+           
+           Recall how in C we save a 2D array as a long 1D array with indexing
+           defined by A[row*NUM_COLS + col] 
+
+           The y-dim goes along the cols; the x-dim goes along the rows */
+
+        gptr_cinc = gridsize-(iymax-iymin)-1;	/* 1 bc at least 1 sgrptr++ */
+            
+        /* start the pointer at the min positions where the kernel has an effect */
+        sgrptr = sg_real + (ixmin*gridsize+iymin);
+        sgiptr = sg_imag + (ixmin*gridsize+iymin);
+                            
+        for (gcount1 = ixmin; gcount1 <= ixmax; gcount1++)
+            {
+            dkx = (double)(gcount1-gridcenter) / (double)gridsize  - *kxptr;
+            for (gcount2 = iymin; gcount2 <= iymax; gcount2++)
+                {
+                dky = (double)(gcount2-gridcenter) / 
+                (double)gridsize - *kyptr;
+
+                dk = sqrt(dkx*dkx+dky*dky);	/* k-space separation*/
+
+                if (dk < kwidth)	/* sample affects this
+                               grid point */
+                    {
+                    /* Find index in kernel lookup table */
+                    fracind = dk/kwidth*(double)(nkernelpts-1);
+                    kernelind = (int)fracind;
+                    fracdk = fracind-(double)kernelind;
+
+                    /* Linearly interpolate in kernel lut */
+                    kern = kerneltable[(int)kernelind]*(1-fracdk)+
+                            kerneltable[(int)kernelind+1]*fracdk;
+
+                    /* This is the conv. step. since the s_real/s_imag contain
+                       discrete points, this is like conv. the kernel with a 
+                       bunch of delta functions. So we can just mult. the
+                       kernel value at the given disp. by the data point value.
+                       No need to add a bunch of values together, since data
+                       point is like a delta func. */
+                    *sgrptr += kern * *srptr * *dcfptr;
+                    *sgiptr += kern * *siptr * *dcfptr;
+                    }
+                sgrptr++;
+                sgiptr++;
+                }
+            sgrptr+= gptr_cinc;
+            sgiptr+= gptr_cinc;
+            }
+        kxptr++;		/* Advance kx pointer */
+        kyptr++;   	/* Advance ky pointer */
+        dcfptr++;		/* Advance dcf pointer */		
+        srptr++;	/* Advance real-sample pointer */
+        siptr++;	/* Advance imag-sample pointer */
+        }
+
+    if (!conv_array_to_PyObject(sg_real, py_sg_real)) return NULL;
+    if (!conv_array_to_PyObject(sg_imag, py_sg_imag)) return NULL;
+
+    free(dcf);
+    free(kx);
+    free(ky);
+    free(s_real);
+    free(s_imag);
+    free(sg_real);
+    free(sg_imag);
+    free(kerneltable);
+
+    // needed when writing a "void" Python C routine
+    Py_INCREF(Py_None);
+    return Py_None;
 }
 
 /*** PYTHON MODULE CREATION METHODS  ***/
@@ -420,6 +476,8 @@ static PyMethodDef gridmethods[] = {
 /* */
     {"calcdcflut",  calcdcflut, METH_VARARGS,
      "Calculates the DCFs using a kernel look-up table"},
+    {"gridlut",  gridlut, METH_VARARGS,
+     "Grids data using DCFs and a kernel look-up table"},
     {NULL, NULL, 0, NULL} /* Sentinel */
 };
 
