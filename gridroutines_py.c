@@ -352,9 +352,7 @@ gridlut(PyObject *self, PyObject *args)
     sg_imag = conv_PyObject_to_array(py_sg_imag);
     kerneltable = conv_PyObject_to_array(py_kerneltable);
 
-
-    /* ========= Zero Output Points ========== */
-
+    /* Auxiliary pointers */
     dcfptr = dcf;
     kxptr = kx;
     kyptr = ky;
@@ -363,7 +361,8 @@ gridlut(PyObject *self, PyObject *args)
     sgrptr = sg_real;
     sgiptr = sg_imag;
     gridsizesq = gridsize*gridsize;
-     
+
+    /* ========= Zero Output Points ========== */
     // setting each element in array to zero using the pointers
     for (gcount1 = 0; gcount1 < gridsizesq; gcount1++)
         {
