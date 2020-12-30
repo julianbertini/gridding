@@ -8,7 +8,7 @@
 
 
 static double *
-conv_PyObject_to_array(pyobj)
+PyObject_to_array(pyobj)
 /* 
     Converts a PyObject that holds a sequence (list) into a C array
 
@@ -63,7 +63,7 @@ PyObject *pyobj; /* PyObject holding the Python list */
 }
 
 static int 
-conv_array_to_PyObject(seq, pyobj)
+array_to_PyObject(seq, pyobj)
 /* 
     Converts a C array to a PyObject that holds a sequence (list) 
 
@@ -102,6 +102,80 @@ PyObject *pyobj; /* PyObject holding the Python list */
     return 1;
 }
 
+static void
+convolve(w, dcf, kx, ky, kerneltable, kwidth, nsamples, nkernelpts)
+/* Calculates the convolution of dcf with kernel
+*/
+
+double *w; /* output - conv between kern and dcf */
+double *dcf; /* prev dcf factors  */
+double *kx;
+double *ky;
+double *kerneltable;
+double kwidth; /* Conv kernel width, in k-space units */
+int nsamples;		/* Number of k-space samples, total. */
+int nkernelpts;		/* Number of points in kernel lookup-table */
+
+{
+    int kcount1;		/* Counts through k-space sample locations */
+    int kcount2;		/* Counts through k-space sample locations */
+    int kernelind;			/* Index of kernel value, for lookup. */
+    double *kxptr;			/* Aux. pointer. */
+    double *kyptr;			/* Aux. pointer. */
+    double *wptr;           /* Aux. pointer. */
+    double *dcfptr;
+    double dkx,dky,dk;		/* Delta in x, y and abs(k) for kernel calc.*/
+    double fracdk;			/* Fractional part of lookup index. */
+    double fracind;			/* Fractional lookup index. */
+    double kern;			/* Kernel value, avoid duplicate calculation.*/
+
+    kxptr = kx;
+    kyptr = ky;
+    wptr = w;
+    dcfptr = dcf;
+     
+    for (kcount1 = 0; kcount1 < nsamples; kcount1++)
+    {
+        for (kcount2 = kcount1+1; kcount2 < nsamples; kcount2++)
+        {
+            dkx = *kxptr-kx[kcount2];
+            dky = *kyptr-ky[kcount2];
+            dk = sqrt(dkx*dkx+dky*dky);	/* k-space separation*/
+
+            if (dk < kwidth)	/* sample affects this
+                                   grid point */
+            {
+                /* Find index in kernel lookup table */
+                fracind = dk/kwidth*(double)(nkernelpts-1);
+                kernelind = (int)fracind;
+                fracdk = fracind-(double)kernelind;
+
+                /* Linearly interpolate in kernel lut */
+                kern = kerneltable[(int)kernelind]*(1-fracdk)+
+                        kerneltable[(int)kernelind+1]*fracdk;
+
+                w[kcount2] += kern;
+                *wptr +=  kern;
+            }
+        }
+        dcfptr++;
+        wptr++;
+        kxptr++;
+        kyptr++;
+    }
+}
+
+static void set(arr, val, len)
+/* Sets all values in an array to [val]*/
+double *arr;
+double val;
+int len;
+
+{
+    for(int i = 0; i < len; i++)
+        arr[i] = val;
+}
+
 static PyObject *
 calcdcflut(PyObject *self, PyObject *args)
 
@@ -121,7 +195,7 @@ calcdcflut(PyObject *self, PyObject *args)
 	describes the contribution of each data sample 
 	to the value at each grid point:
 
-		grid-point value += data value / dcf * kernel(dk)
+		grid-point value += data value * dcf * kernel(dk)
 
 	where:
 		data value is the complex sampled data value.
@@ -147,107 +221,82 @@ calcdcflut(PyObject *self, PyObject *args)
     int gridsize;		/* Number of points in kx and ky in grid. */
     int nsamples;		/* Number of k-space samples, total. */
     int nkernelpts;		/* Number of points in kernel lookup-table */
+    int niterations;    /* Number of iterations for dcf calculation */
+    int already_calculated;
     double convwidth;	/* Kernel width, in grid points. */
 
     /* OTHER VARS */
     int kcount1;		/* Counts through k-space sample locations */
-    int kcount2;		/* Counts through k-space sample locations */
 
     double *dcf;
     double *kx;
     double *ky;
     double *kerneltable;
+    double *w;
 
     double *dcfptr;			/* Aux. pointer, for looping. */
-    double *kxptr;			/* Aux. pointer. */
-    double *kyptr;			/* Aux. pointer. */
+    double *wptr;			/* Aux. pointer. */
 
     double kwidth;			/* Conv kernel width, in k-space units */
-    double dkx,dky,dk;		/* Delta in x, y and abs(k) for kernel calc.*/
-    int kernelind;			/* Index of kernel value, for lookup. */
-    double fracdk;			/* Fractional part of lookup index. */
-    double fracind;			/* Fractional lookup index. */
-    double kern;			/* Kernel value, avoid duplicate calculation.*/
 
     /* parse input argument  */
-    if (!PyArg_ParseTuple(args, "OOOOiiid", &py_kx, &py_ky, &py_dcf, &py_kerneltable, 
-    &gridsize, &nsamples, &nkernelpts, &convwidth)) return NULL;
+    if (!PyArg_ParseTuple(args, "OOOOiiiiid", &py_kx, &py_ky, &py_dcf, &py_kerneltable, 
+    &gridsize, &nsamples, &nkernelpts, &niterations, &already_calculated,  &convwidth)) return NULL;
+
+    // If dcf has already been calculated, do not run again.
+    // This is a hacky way to solve some weird issue within Python where the two C routines
+    // need to be called back to back otherwise weird things happen.
+    if (already_calculated) return Py_BuildValue("O", py_dcf);
+
+    w = malloc(nsamples*sizeof(double)); /* for dcf iterative calculation (must FREE) */
 
     kwidth = convwidth/(double)(gridsize);	/* Width of kernel, in k-space units. */
 
     /* convert PyObject lists to C pointers */
-    kx = conv_PyObject_to_array(py_kx); // allocates memory
-    ky = conv_PyObject_to_array(py_ky); // allocates memory
-    dcf = conv_PyObject_to_array(py_dcf); // allocates memory
-    kerneltable = conv_PyObject_to_array(py_kerneltable); // allocates memory
+    kx = PyObject_to_array(py_kx); // allocates memory
+    ky = PyObject_to_array(py_ky); // allocates memory
+    dcf = PyObject_to_array(py_dcf); // allocates memory
+    kerneltable = PyObject_to_array(py_kerneltable); // allocates memory
 
-    /* ========= Set all DCFs to 1. ========== */
 
     /* 	DCF = 1/(sum( ksamps convolved with kernel )  */
 
+    /* Initialize dcf and w arrays */
     dcfptr = dcf; 
-    for (kcount1 = 0; kcount1 < nsamples; kcount1++)
-        *(dcfptr++) = 1.0;
+    wptr = w;
+    set(dcf, 1.0, nsamples);
+    set(w, 1.0, nsamples);
      
-    /* ========= Loop Through k-space Samples ========= */
-                    
-    dcfptr = dcf;
-    kxptr = kx;
-    kyptr = ky;
-     
-    for (kcount1 = 0; kcount1 < nsamples; kcount1++)
-        {
-        /* printf("Current k-space location = (%f,%f) \n",*kxptr,*kyptr); */
+    /* ========= Calculate dcf thru convolution ========= */
+    // calculates conv of kernel with dcf, saves into w
 
-        for (kcount2 = kcount1+1; kcount2 < nsamples; kcount2++)
-            {
-            dkx = *kxptr-kx[kcount2];
-            dky = *kyptr-ky[kcount2];
-            dk = sqrt(dkx*dkx+dky*dky);	/* k-space separation*/
-            /*
-            printf("   Comparing with k=(%f,%f),  sep=%f \n",
-                    kx[kcount2],ky[kcount2],dk);	
-            */
-        
-            if (dk < kwidth)	/* sample affects this
-                           grid point */
-                {
-                /* Find index in kernel lookup table */
-                fracind = dk/kwidth*(double)(nkernelpts-1);
-                kernelind = (int)fracind;
-                fracdk = fracind-(double)kernelind;
-
-                /* Linearly interpolate in kernel lut */
-                kern = kerneltable[(int)kernelind]*(1-fracdk)+
-                        kerneltable[(int)kernelind+1]*fracdk;
-
-                dcf[kcount2] += kern;
-                *dcfptr += kern;
-                }
-            }
-        dcfptr++;
-        kxptr++;
-        kyptr++;
-        }
-
-    // this resets dcfptr to the beg. of array (pointed to by dcf)
-    dcfptr = dcf; 
-    for (kcount1 = 0; kcount1 < nsamples; kcount1++)
+    for (int i = 0; i < niterations; i++)
     {
-        *dcfptr = 1/(*dcfptr);
-        dcfptr++;
+        convolve(w, dcf, kx, ky, kerneltable, kwidth, nsamples, nkernelpts);
+
+        dcfptr = dcf; 
+        wptr = w;
+        for (kcount1 = 0; kcount1 < nsamples; kcount1++)
+        {
+            *dcfptr = *dcfptr/(*wptr);
+            dcfptr++;
+            wptr++;
+        }
+        set(w, 1.0, nsamples);
     }
 
-    if (!conv_array_to_PyObject(dcf, py_dcf)) return NULL;
+    if (!array_to_PyObject(dcf, py_dcf)) return NULL;
     
+    free(w);
     free(dcf);
     free(kx);
     free(ky);
     free(kerneltable);
 
+    return Py_BuildValue("O", py_dcf);
     // needed when writing a "void" Python C routine
-    Py_INCREF(Py_None);
-    return Py_None;
+    //Py_INCREF(Py_None);
+    //return Py_None;
 }
 
 static PyObject *
@@ -343,14 +392,14 @@ gridlut(PyObject *self, PyObject *args)
 
     /* convert PyObjects to C pointers 
        all allocate memory; must free once done. */
-    kx = conv_PyObject_to_array(py_kx);
-    ky = conv_PyObject_to_array(py_ky);
-    s_real = conv_PyObject_to_array(py_s_real);
-    s_imag = conv_PyObject_to_array(py_s_imag);
-    dcf = conv_PyObject_to_array(py_dcf);
-    sg_real = conv_PyObject_to_array(py_sg_real);
-    sg_imag = conv_PyObject_to_array(py_sg_imag);
-    kerneltable = conv_PyObject_to_array(py_kerneltable);
+    kx = PyObject_to_array(py_kx);
+    ky = PyObject_to_array(py_ky);
+    s_real = PyObject_to_array(py_s_real);
+    s_imag = PyObject_to_array(py_s_imag);
+    dcf = PyObject_to_array(py_dcf);
+    sg_real = PyObject_to_array(py_sg_real);
+    sg_imag = PyObject_to_array(py_sg_imag);
+    kerneltable = PyObject_to_array(py_kerneltable);
 
     /* Auxiliary pointers */
     dcfptr = dcf;
@@ -374,7 +423,7 @@ gridlut(PyObject *self, PyObject *args)
     /* ========= Loop Through k-space Samples ========= */
                     
     for (kcount = 0; kcount < nsamples; kcount++)
-        {
+    {
 
         /* ----- Find limit indices of grid points that current
              sample may affect (and check they are within grid) ----- */
@@ -409,18 +458,18 @@ gridlut(PyObject *self, PyObject *args)
         sgiptr = sg_imag + (ixmin*gridsize+iymin);
                             
         for (gcount1 = ixmin; gcount1 <= ixmax; gcount1++)
-            {
+        {
             dkx = (double)(gcount1-gridcenter) / (double)gridsize  - *kxptr;
             for (gcount2 = iymin; gcount2 <= iymax; gcount2++)
-                {
+            {
                 dky = (double)(gcount2-gridcenter) / 
                 (double)gridsize - *kyptr;
 
                 dk = sqrt(dkx*dkx+dky*dky);	/* k-space separation*/
 
                 if (dk < kwidth)	/* sample affects this
-                               grid point */
-                    {
+                                       grid point */
+                {
                     /* Find index in kernel lookup table */
                     fracind = dk/kwidth*(double)(nkernelpts-1);
                     kernelind = (int)fracind;
@@ -438,22 +487,22 @@ gridlut(PyObject *self, PyObject *args)
                        point is like a delta func. */
                     *sgrptr += kern * *srptr * *dcfptr;
                     *sgiptr += kern * *siptr * *dcfptr;
-                    }
+                }
                 sgrptr++;
                 sgiptr++;
-                }
+            }
             sgrptr+= gptr_cinc;
             sgiptr+= gptr_cinc;
-            }
+        }
         kxptr++;		/* Advance kx pointer */
         kyptr++;   	/* Advance ky pointer */
         dcfptr++;		/* Advance dcf pointer */		
         srptr++;	/* Advance real-sample pointer */
         siptr++;	/* Advance imag-sample pointer */
-        }
+    }
 
-    if (!conv_array_to_PyObject(sg_real, py_sg_real)) return NULL;
-    if (!conv_array_to_PyObject(sg_imag, py_sg_imag)) return NULL;
+    if (!array_to_PyObject(sg_real, py_sg_real)) return NULL;
+    if (!array_to_PyObject(sg_imag, py_sg_imag)) return NULL;
 
     free(dcf);
     free(kx);
@@ -464,9 +513,11 @@ gridlut(PyObject *self, PyObject *args)
     free(sg_imag);
     free(kerneltable);
 
+    return Py_BuildValue("(OO)", py_sg_real, py_sg_imag);
+
     // needed when writing a "void" Python C routine
-    Py_INCREF(Py_None);
-    return Py_None;
+    //Py_INCREF(Py_None);
+    //return Py_None;
 }
 
 /*** PYTHON MODULE CREATION METHODS  ***/
